@@ -1,0 +1,991 @@
+---
+title: "ABO blood groups, Mountain et al 2025"
+author: "Katie Mountain"
+date: "2025-06-24"
+output: html_document
+---
+
+## ABO blood group antigens influence host-microbe interactions and risk of early spontaneous preterm birth
+
+This is the code pertaining to the above paper by Mountain et al 2025. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(boot)
+library(ggplot2)
+library(ggrepel)
+library(readr)
+library(ggpubr)
+library(readxl)
+library(cowplot)
+library(egg)
+library(grid)
+library(gridExtra)
+library(GGally)
+library(finalfit)
+library(knitr)
+library(Hmisc)
+library(tidyr)
+library(waffle)
+library(tibble)
+library(RColorBrewer)
+library(corrplot)
+library(rstatix)
+library(epitools)
+library(ggprism)
+library(mixOmics)
+library("reshape2")
+library(here)
+```
+
+## Data
+
+Data for the general obstetric cohort is restricted according to the study data protection and governance restrictions, and is therefore not provided. 
+ 
+
+```{r datasets}
+
+#High risk clinic cohort n=2084
+mydata <- read.csv(here("Data", "highrisk_clinical_cohort.csv"), header=TRUE)
+
+mydata = mydata %>% mutate(
+  
+  blood_group=blood_group %>% factor(),
+  Rh_Status = Rh_Status %>% factor() %>% fct_relevel("Positive"), 
+  Smoking_Status=Smoking_Status %>% factor() %>% fct_relevel("Yes"),
+  Ethnicity_Simplified=Ethnicity_Simplified %>% factor() %>% fct_relevel("White"), 
+  `Uterine Anomaly`=`Uterine Anomaly` %>% factor(), 
+  `Previous Cervical Surgery?`=`Previous Cervical Surgery?` %>% factor(),
+  `Previous PTB`=`Previous PTB` %>% factor(),
+  `Previous MTL`=`Previous MTL` %>% factor(), 
+  `Previous PPROM?`=`Previous PPROM?` %>% factor(), 
+  `Previous Cerclage?`=`Previous Cerclage?` %>% factor(), 
+  FDCS = FDCS %>% factor(), 
+  Risk.Factor=Risk.Factor %>% factor(),
+  `Singleton/multiple`=`Singleton/multiple` %>% factor(), 
+  `Cerclage in Pregnancy`=`Cerclage in Pregnancy` %>% factor(), 
+  Material = Material %>% factor(), 
+  cerclage_type=cerclage_type %>% factor(), 
+  short_cervix = short_cervix %>% factor() %>% 
+    fct_collapse("No" = c("No scans", "No")),
+  PPROM=PPROM %>% factor(), 
+  `Spontaneous/Indicated`=`Spontaneous/Indicated` %>% factor(), 
+  GACategory=GACategory %>% factor(), 
+  Preterm.Term=Preterm.Term %>% factor() %>% 
+    fct_relevel("Term", "Preterm"), 
+  GA34x=GA34x %>% factor() %>% 
+    fct_relevel(">34 weeks"), 
+  single_or_multiple_risk=single_or_multiple_risk %>% factor(), 
+  multiple_risks=multiple_risks %>% factor(), 
+  risk_simple=risk_simple %>% factor() %>% fct_relevel("Cervical Treatment", "Previous PTB/MTL", "Incidental Short Cervix", "Uterine Anomaly", "Other"), 
+  GAforcerclage = GAforcerclage %>% factor() %>% 
+    fct_relevel("Term", "Late sPTB", "Extreme/Early sPTB", "MTL"),
+  GA28 = GA28 %>% factor() %>% fct_relevel(">28"),
+   MTL = MTL %>% factor()
+  )
+  
+#Microbiome Samples Cohort n= 596
+samples_cohort <- read.csv(here("Data", "microbiome_cohort.csv"), header=TRUE)
+
+samples_cohort=samples_cohort %>% mutate(blood_group = blood_group %>% factor(), 
+                         CST_simple = CST_simple %>% factor() %>% 
+                           fct_relevel("V", "IV", "III", "II", "I"), 
+                         crisp_or = crisp_or %>% factor(),
+                         iners_or = iners_or %>% factor(), 
+                         risk_simple=risk_simple %>% fct_recode("CT" = "Cervical Treatment", "p.PTB/MTL"= "Previous PTB/MTL"),
+    blood_group_risk = paste0(blood_group,"\n",risk_simple) %>% factor(), 
+         blood_group_37 =paste0(blood_group,"\n",Preterm.Term) %>% factor(),
+    short_cervix_2 = short_cervix  %>% fct_recode("<=25mm"="Yes", 
+                                                  ">25mm"="No"),
+    blood_group_short = paste0(blood_group,"\n", short_cervix_2) %>% factor())
+
+#Immune Samples Cohort n=314
+immune_cohort <- read.csv(here("Data", "immune_cohort.csv"), header=TRUE)
+
+
+immune_cohort=immune_cohort %>% mutate(blood_group = blood_group %>% factor(), 
+                         CST_simple = CST_simple %>% factor(), 
+                         risk_simple=risk_simple %>% fct_recode("CT" = "Cervical Treatment", "p.PTB/MTL"= "Previous PTB/MTL"),
+    blood_group_risk = paste0(blood_group,"\n",risk_simple) %>% factor(), 
+         blood_group_37 =paste0(blood_group,"\n",Preterm.Term) %>% factor(),
+    short_cervix_2 = short_cervix  %>% fct_recode("<=25mm"="Yes", 
+                                                  ">25mm"="No"),
+    blood_group_short = paste0(blood_group,"\n", short_cervix_2) %>% factor(), 
+    iners_prop = Lactobacillus_iners/read_count, 
+         asinCrisp = crisp_prop %>% asin(), 
+         logIL8 = `IL-8` %>% log10(), 
+         CrispDom= crisp_prop %>% 
+           cut(breaks=c(-0.1,0.8,1.1), inlcude.lowest=TRUE, right=FALSE) %>% 
+           factor()%>% 
+        fct_recode("Deplete" =  "[-0.1,0.8)",
+        "Dominant" = "[0.8,1.1)"),
+                         crisp_or = crisp_or %>% factor(),
+         blood_group_cst = paste0(blood_group,"\n",crisp_or) %>% factor(),
+    GAforcerclage=GAforcerclage %>% factor() %>% fct_relevel("MTL"), 
+                          blood_group_crisp = paste0(blood_group,"\n",CrispDom) %>% factor())
+
+
+```
+
+## Main Figures 
+
+#Figure 2 
+
+bar function: 
+func_bar <- function(data, x_var, out_var, subtitle, 
+                     x_title, y_title, fill_lab){
+  # Aesthetics
+  fill_colors <- c("#FFFBC9", "#CB9C9F","#A4BADD")
+  fill_labels <- c("A", "B", "O")
+  
+  
+  
+  #Percentage
+  percentage <- data %>% 
+    group_by_(x_var) %>% 
+    count_(out_var) %>% 
+    mutate(Percent = round(n/sum(n)*100, 1),
+           Percentage = round(n/sum(n)*100,2), 
+           sum_n = sum(n)) %>% 
+    as.data.frame()
+  
+  percentage <- percentage %>% 
+    mutate( x_var_n = percentage[,1] %>%paste0(., "\n", "(n=", sum_n, ")") )
+  
+  
+  # ABO Bar
+  ggplot(percentage, 
+         aes(x = x_var_n, y = Percent, fill = x_var_n)) + 
+    geom_bar(aes(colour = out_var), stat = "identity") + 
+    scale_colour_manual(values = c("black", "white"),  guide="none")+
+    scale_fill_manual(values = fill_colors) + 
+    geom_text(aes(label = round(Percentage, 1)), 
+              position = position_dodge(width=1), size = 4, vjust=-0.5)+
+    labs( subtitle = subtitle,
+          x = x_title,
+          y = y_title) +
+    theme_bw() + 
+    scale_y_continuous(limits = c(0, 40), n.breaks = 6 , minor_breaks = waiver())+
+    theme(plot.title = element_text(hjust = 0, size = 10), 
+          plot.subtitle = element_text(hjust = 0, size = 9, colour = "black", face = "bold"), 
+          axis.title.x = element_text(size = 11, colour = "black", face = "bold"),
+          axis.text.x = element_text(size = 11, colour="black", face = "bold"), 
+          axis.title.y = element_text(size = 11, color = "black", face= "bold"), 
+          axis.text.y = element_text(size = 10, face = "bold"),
+          legend.position = "none") 
+}
+
+OR/Fishers function
+
+#function to write contingency table and OR 
+func_OR_Chi <- function(data, exploratory_var ){
+  contingency_table1<-table(exploratory_var,data$MTL)
+  contingency_table2<-table( exploratory_var, data$GA34x)
+  contingency_table3 <-table(exploratory_var, data$Preterm.Term)
+  contingency_table4 <- table(exploratory_var, data$GA28)
+  contingency_table5 <- table(exploratory_var, data$short_cervix)
+  
+  #Short Cervix   
+  fisherstable5<-pairwise_prop_test(contingency_table5,  p.adjust.method = "none", alternative = "less", correct = FALSE)
+  outputtable5<- fisherstable5 %>% 
+    mutate(Outcome = "Short Cervix")
+  
+  #MTL    
+  fisherstable1<-pairwise_prop_test(contingency_table1,  alternative = "less", correct = FALSE)
+  outputtable1<- fisherstable1 %>% 
+    mutate(Outcome = "MTL")
+  
+  #28 weeks 
+  fisherstable4<-pairwise_prop_test(contingency_table4,  alternative = "less", correct = FALSE)
+  outputtable4<- fisherstable4 %>% 
+    mutate(Outcome = "28 weeks")
+  
+  
+  #34 weeks
+  fisherstable2<-pairwise_prop_test(contingency_table2,   alternative= "less", correct = FALSE)
+  outputtable2<- fisherstable2 %>% 
+    mutate(Outcome = "34 weeks")
+  
+  
+  #37 weeks 
+  fisherstable3<-pairwise_prop_test(contingency_table3,  alternative = "less", correct = FALSE)
+  outputtable3<- fisherstable3 %>% 
+    mutate(Outcome = "37 weeks")
+  
+  
+  output <- rbind(outputtable5,outputtable1, outputtable4,
+                  outputtable2,
+                  outputtable3) %>% kable()
+  
+  output
+}
+
+Panels a-g 
+Are taken from the general obstetric population - data not public 
+a-f uses the generic bar function
+
+g: uses the final fit package
+The dependent variable is sPTB <37 weeks gestational age. The explanatory variables were: ABO blood group, ethnicity, previous cervical treatment, previous PTB, previous MTL. 
+
+
+
+
+```{r figure 2h-j}
+#Datasubsets
+mydata_no_iatro = mydata %>% filter(`Spontaneous/Indicated`=="Spontaneous"| is.na(`Spontaneous/Indicated`))
+
+mydata_no_iatro = mydata_no_iatro %>% filter(blood_group!="AB") %>% mutate(blood_group=blood_group %>% as.character() %>% factor())
+
+ptb_mtl = mydata_no_iatro %>% filter(Risk.Factor=="PTB"|Risk.Factor=="PTB+MTL"|Risk.Factor=="MTL") %>% filter(`Previous Cervical Surgery?`=="No"|is.na(`Previous Cervical Surgery?`)) %>% filter(`Uterine Anomaly`=="No"|is.na(`Uterine Anomaly`))
+
+ct = mydata_no_iatro %>% filter(risk_simple == "Cervical Treatment")
+
+#Plots
+sptb_34 = func_bar(data=mydata_no_iatro,
+                   x_var= "blood_group", 
+                   out_var = "GA34x",
+                   subtitle= "All Risks", 
+                   x_title= "Blood Group",
+                   y_title = "sPTB <34 weeks (%)")
+
+chi = func_OR_Chi_plot(data = mydata_no_iatro, exploratory_var = "blood_group", out_var = "GA34x")
+chi = chi %>% mutate(y.position = row_number()*4 +14)
+
+sptb_34 = sptb_34 + 
+  add_pvalue(data = chi, xmin= "group1", xmax= "group2", label= "p.adj.signif",
+              inherit.aes = FALSE, y.position = "y.position", label.size = 4)
+
+sptb_34
+
+sptb_34_ptb = func_bar(data=ptb_mtl,
+                   x_var= "blood_group", 
+                   out_var = "GA34x",
+                   subtitle= "Previous PTB/MTL", 
+                   x_title= "Blood Group",
+                   y_title = "sPTB <34 weeks (%)")
+
+chi = func_OR_Chi_plot(data = ptb_mtl, exploratory_var = "blood_group", out_var = "GA34x")
+chi = chi %>% mutate(y.position = row_number()*4 +15)
+
+sptb_34_ptb = sptb_34_ptb + 
+  add_pvalue(data = chi, xmin= "group1", xmax= "group2", label= "p.adj.signif",
+              inherit.aes = FALSE, y.position = "y.position", label.size = 4)
+
+sptb_34_ptb
+
+sptb_34_ct = func_bar(data=ct,
+                   x_var= "blood_group", 
+                   out_var = "GA34x",
+                   subtitle= "Cervical Treatment", 
+                   x_title= "Blood Group",
+                   y_title = "sPTB <34 weeks (%)")
+
+chi = func_OR_Chi_plot(data = ct, exploratory_var = "blood_group", out_var = "GA34x")
+chi = chi %>% mutate(y.position = row_number()*4 +11)
+sptb_34_ct = sptb_34_ct + 
+  add_pvalue(data = chi, xmin= "group1", xmax= "group2", label= "p.adj.signif",
+              inherit.aes = FALSE, y.position = "y.position", label.size = 4)
+
+sptb_34_ct
+
+plot2 = ggpubr::ggarrange(sptb_34,sptb_34_ct,sptb_34_ptb, labels = c("h", "i", "j"), nrow = 1, ncol = 3)
+
+plot2
+```
+
+#Figure 3 
+State which panels made in r and include code from Gang and Virginia (or separate markdowns - as they can provide their own)
+
+```{r figure 3}
+
+```
+
+#Figure 4
+Generic function used to generate plots: 
+func_bar <- function(data, x_var, out_var, title, subtitle, 
+                     x_title, y_title, fill_lab){
+  # Aesthetics - need to add additional colours based on Valencia output
+  fill_colors <- c("#3F5243","#EA8382", "#FEFFB8","#C2FCB7", "#75A97D" )
+  fill_labels <- c("V", "IV", "III", "II","I")
+  
+  
+  
+  #Percentage
+  percentage <- data %>% 
+    group_by_(x_var) %>% 
+    count_(out_var) %>% 
+    mutate(Percent = round(n/sum(n)*100, 1),
+           Percentage = round(n/sum(n)*100,2), 
+           sum_n = sum(n)) %>% 
+    as.data.frame()
+  
+  percentage <- percentage %>% 
+    mutate( x_var_n = percentage[,1] %>%paste0(., "\n", "(n=", sum_n, ")") )
+  
+  
+  # ABO Bar
+  ggplot(percentage, 
+         aes(x = x_var_n, y = Percent, fill = CST_simple)) + 
+    geom_bar(aes(fill= CST_simple), stat = "identity", colour="black") + 
+    scale_fill_manual(values = fill_colors, labels=fill_labels) + 
+    geom_text(aes(label = round(Percentage)), 
+              position = position_stack(vjust = 0.5), size = 5)+
+    labs(title = title, 
+         subtitle = subtitle,
+         x = x_title,
+         y = y_title, 
+         fill = "CST") +
+    theme_bw() + 
+    scale_y_continuous(limits = c(0, 115), n.breaks = 6 , minor_breaks = waiver())+
+    theme(plot.title = element_text(hjust = 0, size = 14, , face= "bold"), 
+          plot.subtitle = element_text(hjust = 0, size = 12, , face= "bold"), 
+          axis.title.x = element_text(size = 14, , face= "bold"),
+          axis.text.x = element_text(size = 12, colour="black", face= "bold"), 
+          axis.title.y = element_text(size = 14, , face= "bold"), 
+          axis.text.y = element_text(size = 12, colour="black", face="bold"),
+          legend.position = "right") 
+}
+
+func_chi <- function(data, x_var, out_var){ 
+  
+  #get counts 
+  data<-data%>%group_by_(x_var) %>% mutate(count= n()) %>% ungroup() 
+  data<-data %>% mutate_(var=x_var, CST_simple = out_var)
+  data <- data %>% mutate(x_var_n = var %>% paste0(., "\n", "(n=", count, ")") %>% factor())
+  
+  #contingency table 
+  contingency_table <- table(data$x_var_n, data$CST_simple)
+  fishertable = pairwise_prop_test(contingency_table, p.adjust.method = "BH", correct=FALSE)%>% 
+    mutate(p = p %>% round(., 3), p.adj = p.adj %>% round(.,3))
+  fishertable
+}
+
+```{r figure 4}
+
+#Data subsets
+timepoint_b = samples_cohort %>% 
+  filter(timepoint=="B")
+
+timepoint_a = samples_cohort %>% 
+  filter(timepoint =="A")
+ 
+
+
+ct_ptb_b = timepoint_b %>% 
+  filter(risk_simple=="p.PTB/MTL"&`Uterine Anomaly`=="No"&`Previous Cervical Surgery?`=="No"|risk_simple=="CT")
+
+ct_ptb_a = timepoint_a %>% 
+  filter(risk_simple=="p.PTB/MTL"&`Uterine Anomaly`=="No"&`Previous Cervical Surgery?`=="No"|risk_simple=="CT")
+
+GA34_b = 
+  timepoint_b %>% 
+filter(`Spontaneous/Indicated`=="Spontaneous"| `Spontaneous/Indicated`=="SPontaneous"| is.na(`Spontaneous/Indicated`)) %>% 
+  filter(GA34x =="<34"|Preterm.Term=="Term")
+
+GA34_a = 
+  timepoint_a %>% 
+  filter(`Spontaneous/Indicated`=="Spontaneous"| `Spontaneous/Indicated`=="SPontaneous"| is.na(`Spontaneous/Indicated`)) %>% 
+  filter(GA34x =="<34"|Preterm.Term=="Term")
+
+#Plots
+a_all = func_bar(data = timepoint_a, x_var = "blood_group", out_var = "CST_simple", title ="All Samples", subtitle = "Timepoint 1", x_title= "Blood Group", y_title = "CST")
+
+b_all = func_bar(data = timepoint_b, x_var = "blood_group", out_var = "CST_simple", title ="All Samples", subtitle = "Timepoint 2", x_title= "Blood Group", y_title = "CST")
+
+a_all_chi = func_chi(data= timepoint_a, x_var = "blood_group", out_var = "crisp_or")
+
+
+a_all = a_all + 
+ scale_y_continuous(limits = c(0, 119), n.breaks = 6 , minor_breaks = waiver())+
+  add_pvalue(data = a_all_chi, 
+              xmin = "group1", xmax = "group2", label = "p.adj.signif", label.size = 6,
+             y.position = c(105,114,105), inherit.aes=FALSE)
+
+b_all_chi = func_chi(data= timepoint_b, x_var = "blood_group", out_var = "crisp_or")
+
+b_all = b_all + 
+  scale_y_continuous(limits = c(0, 119), n.breaks = 6 , minor_breaks = waiver())+
+  add_pvalue(data = b_all_chi, 
+              xmin = "group1", xmax = "group2", label = "p.adj.signif", label.size = 6,
+             y.position = c(105,114,105), inherit.aes=FALSE)
+
+a_all
+b_all
+
+rf_a = func_bar(data = ct_ptb_a, x_var = "blood_group_risk", out_var = "CST_simple", title ="Selected Risk Factors", subtitle = "Timepoint 1", x_title= "Blood Group", y_title = "CST")
+risk_a = func_chi(data=ct_ptb_a, x_var = "blood_group_risk", out_var = "crisp_or")
+risk_a <- risk_a[c(1,6,15),]
+rf_a = rf_a +
+  add_pvalue(data = risk_a,
+               xmin = "group1", xmax = "group2", label = "p.adj.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+rf_b = func_bar(data = ct_ptb_b, x_var = "blood_group_risk", out_var = "CST_simple", title ="Selected Risk Factors", subtitle = "Timepoint 2", x_title= "Blood Group", y_title = "CST")
+risk_b = func_chi(data=ct_ptb_b, x_var = "blood_group_risk", out_var = "crisp_or") 
+risk_b<- risk_b[c(1,6,15),]
+rf_b = rf_b +
+  add_pvalue(data = risk_b,
+               xmin = "group1", xmax = "group2", label = "p.adj.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+rf_a
+rf_b
+
+GA34_a_A = GA34_a %>% 
+  filter(blood_group=="A")
+
+a_34_chi = func_chi(data = GA34_a_A, x_var = "blood_group_37", out_var = "crisp_or")
+a_34_chi= a_34_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_34_chi <- a_34_chi[c(1,6,15),]
+a_34_A = func_bar(data = GA34_a_A, x_var = "blood_group_37", out_var = "CST_simple", title ="", subtitle = "sPTB <34 weeks", x_title= "Gestational Group", y_title = "CST")
+a_34_A = a_34_A + 
+  add_pvalue(data = a_34_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_34_A
+
+a_34_B = a_34_B + 
+  add_pvalue(data = a_34_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_34_B
+
+GA34_a_B = GA34_a %>% 
+  filter(blood_group=="B")
+
+a_34_chi = func_chi(data = GA34_a_B, x_var = "blood_group_37", out_var = "crisp_or")
+
+a_34_chi 
+a_34_chi= a_34_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_34_chi <- a_34_chi[c(1,6,15),]
+a_34_B = func_bar(data = GA34_a_B, x_var = "blood_group_37", out_var = "CST_simple", title ="", subtitle = "sPTB <34 weeks", x_title= "Gestational Group", y_title = "CST")
+a_34_B = a_34_B + 
+  add_pvalue(data = a_34_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_34_B
+
+GA34_a_O = GA34_a %>% 
+  filter(blood_group=="O")
+
+a_34_chi = func_chi(data = GA34_a_O, x_var = "blood_group_37", out_var = "crisp_or")
+a_34_chi= a_34_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_34_chi <- a_34_chi[c(1,6,15),]
+
+a_34_O = func_bar(data = GA34_a_O, x_var = "blood_group_37", out_var = "CST_simple", title ="", subtitle = "sPTB <34 weeks", x_title= "Gestational Group", y_title = "CST")
+a_34_O = a_34_O + 
+  add_pvalue(data = a_34_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_34_O
+
+timepoint_a_A = timepoint_a %>% 
+  filter(blood_group=="A")
+
+a_short_A = func_bar(data = timepoint_a_A, x_var = "blood_group_short", out_var = "CST_simple", title ="Blood Group A", subtitle = "Cervical Shortening", x_title= "Cervical Length", y_title = "CST")
+a_short_chi = func_chi(data = timepoint_a_A, x_var = "blood_group_short", out_var = "crisp_or")
+a_short_chi= a_short_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_short_chi <- a_short_chi[c(1,6,15),]
+a_short_A = a_short_A + 
+  add_pvalue(data = a_short_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_short_A
+
+timepoint_a_B = timepoint_a %>% 
+  filter(blood_group=="B")
+
+a_short_B = func_bar(data = timepoint_a_B, x_var = "blood_group_short", out_var = "CST_simple", title ="Blood Group B", subtitle = "Cervical Shortening", x_title= "Cervical Length", y_title = "CST")
+a_short_chi = func_chi(data = timepoint_a_B, x_var = "blood_group_short", out_var = "crisp_or")
+a_short_chi= a_short_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_short_chi <- a_short_chi[c(1,6,15),]
+a_short_B = a_short_B + 
+  add_pvalue(data = a_short_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+
+a_short_B
+
+timepoint_a_O = timepoint_a %>% 
+  filter(blood_group=="O")
+
+a_short_O = func_bar(data = timepoint_a_O, x_var = "blood_group_short", out_var = "CST_simple", title ="Blood Group O", subtitle = "Cervical Shortening", x_title= "Cervical Length", y_title = "CST")
+a_short_chi = func_chi(data = timepoint_a_O, x_var = "blood_group_short", out_var = "crisp_or")
+a_short_chi= a_short_chi %>% mutate(p.signif = case_when(p<0.001~ "***", p<0.01~"**", p<0.05~"*", TRUE~ "ns"))
+a_short_chi <- a_short_chi[c(1,6,15),]
+a_short_O = a_short_O + 
+  add_pvalue(data = a_short_chi,
+               xmin = "group1", xmax = "group2", label = "p.signif", label.size = 6,
+             y.position = 108, inherit.aes=FALSE)
+a_short_O
+
+plot = ggpubr::ggarrange(a_all, b_all, rf_a,rf_b,  common.legend=TRUE, legend = "right", labels = "auto", nrow = 2, ncol = 2)
+plot2 = ggpubr::ggarrange(a_short_A, a_34_A, a_short_B, a_34_B, a_short_O, a_34_O,  common.legend=TRUE, legend = "right", labels = c("","","","","",""), nrow = 2, ncol = 3)
+
+```
+
+#Figure 5
+Immune figure - boxplots timepoint b 
+
+```{r figure 5}
+timepoint_b=immune_cohort %>% 
+  filter(timepoint=="B")
+
+timepoint_a = immune_cohort %>% 
+  filter(timepoint=="A")
+
+ct_ptb_b = timepoint_b %>% 
+  filter(risk_simple=="p.PTB/MTL"&`Uterine Anomaly`=="No"&`Previous Cervical Surgery?`=="No"|risk_simple=="CT")
+
+ct_ptb_a = timepoint_a %>% 
+  filter(risk_simple=="p.PTB/MTL"&`Uterine Anomaly`=="No"&`Previous Cervical Surgery?`=="No"|risk_simple=="CT")
+
+p1= func_bar(data=timepoint_b, x_var = "blood_group_cst", out_var = "il_8",  x_title = "Blood Group and CST- L. Crispatus", y_title = "CVF IL-8 (pg/ml)"  )
+
+timepoint_b = func_counts(data=timepoint_b, x_var = "blood_group_cst")
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= timepoint_b,
+  il_8~var_n,
+  comparisons = list(c("A\nCrisp\n(n=36)",	"A\nOther\n(n=53)"),c("B\nCrisp\n(n=14)",	"B\nOther\n(n=27)"), c("O\nCrisp\n(n=49)",	"O\nOther\n(n=56)")),
+  ref.group = NULL,
+  p.adjust.method = "BH",
+  detailed = FALSE
+) 
+p1 = p1+  
+  scale_y_log10()+
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(30000)) 
+
+p1
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= timepoint_b,
+  `IL-1beta`~var_n,
+  comparisons = list(c("A\nCrisp\n(n=36)",	"A\nOther\n(n=53)"),c("B\nCrisp\n(n=14)",	"B\nOther\n(n=27)"), c("O\nCrisp\n(n=49)",	"O\nOther\n(n=56)")),
+  ref.group = NULL,
+  p.adjust.method = "holm",
+  detailed = FALSE
+) 
+
+p2= func_bar(data=timepoint_b, x_var = "blood_group_cst", out_var = "IL_1b",  x_title = "Blood Group and CST - L. Crispatus", y_title = "CVF IL-1beta (pg/ml)"  )
+p2 = p2+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6,
+             y.position = c(5000))
+
+p2
+
+ct_ptb_b=func_counts(data=ct_ptb_b, x_var = "blood_group_risk")
+summary(ct_ptb_b$var_n)
+
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= ct_ptb_b,
+  il_8~var_n,
+  comparisons = list(c("A\nCT\n(n=28)",	"A\np.PTB/MTL\n(n=40)"),c("B\nCT\n(n=9)",	"B\np.PTB/MTL\n(n=21)"), c("O\nCT\n(n=34)",	"O\np.PTB/MTL\n(n=49)")),
+  ref.group = NULL,
+  p.adjust.method = "none",
+  detailed = FALSE
+) 
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= ct_ptb_b,
+  IL_1b~var_n,
+  comparisons = list(c("A\nCT\n(n=28)",	"A\np.PTB/MTL\n(n=40)"),c("B\nCT\n(n=9)",	"B\np.PTB/MTL\n(n=21)"), c("O\nCT\n(n=34)",	"O\np.PTB/MTL\n(n=49)")),
+  ref.group = NULL,
+  p.adjust.method = "none",
+  detailed = FALSE
+) 
+
+p3= func_bar(data=ct_ptb_b, x_var = "blood_group_risk", out_var = "il_8",  x_title = "Blood Group and Risk Factor", y_title = "CVF IL-8 (pg/ml)"  )
+
+p3 = p3+
+    scale_shape_manual(name= "GA at Delivery", values = c(17,18, 1))+
+  scale_size_manual(name= "GA at Delivery",values = c(3, 2, 1))+
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif", 
+            label.size = 6,
+             y.position = c(30000))
+
+p3
+
+p4= func_bar(data=ct_ptb_b, x_var = "blood_group_risk", out_var = "IL_1b",  x_title = "Blood Group and Risk Factor", y_title = "CVF IL-1beta (pg/ml)"  )
+p4 = p4+
+      scale_shape_manual(name= "GA at Delivery", values = c(17,18, 1))+
+  scale_size_manual(name= "GA at Delivery",values = c(3, 2, 1))+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(5000))
+
+p4
+
+timepoint_b=timepoint_b %>% filter(`Spontaneous/Indicated`=="Spontaneous"|is.na(`Spontaneous/Indicated`))
+
+timepoint_b=func_counts(data=timepoint_b, x_var = "blood_group_37")
+summary(timepoint_b$var_n)
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= timepoint_b,
+  il_8~var_n,
+  comparisons = list(c("A\nPreterm\n(n=14)",	"A\nTerm\n(n=68)"),c("B\nPreterm\n(n=12)",	"B\nTerm\n(n=21)"), c("O\nPreterm\n(n=27)",	"O\nTerm\n(n=71)")),
+  ref.group = NULL,
+  p.adjust.method = "BH",
+  detailed = FALSE
+) 
+
+il8_wilcox
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= timepoint_b,
+  IL_1b~var_n,
+  comparisons = list(c("A\nPreterm\n(n=14)",	"A\nTerm\n(n=68)"),c("B\nPreterm\n(n=12)",	"B\nTerm\n(n=21)"), c("O\nPreterm\n(n=27)",	"O\nTerm\n(n=71)")),
+  ref.group = NULL,
+  p.adjust.method = "holm",
+  detailed = FALSE
+) 
+
+il1b_wilcox
+
+p5= func_bar(data=timepoint_b, x_var = "blood_group_37", out_var = "il_8",  x_title = "Blood Group and Outcome", y_title = "CVF IL-8 (pg/ml)"  )
+
+p5 = p5 +
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(30000)) 
+
+p5
+
+p6= func_bar(data=timepoint_b, x_var = "blood_group_37", out_var = "IL_1b",  x_title = "Blood Group and Outcome", y_title = "CVF IL-1beta (pg/ml)"  )
+
+p6 = p6+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6,
+             y.position = c(3000))
+
+p6
+
+plot = ggpubr::ggarrange(p1,p2,p3,p4,p5,p6, common.legend=TRUE, legend = "right", labels = "AUTO", nrow = 3, ncol = 2)
+
+```
+
+#Figure 6
+
+```{r figure 6a}
+immune_cohort = immune_cohort %>%  
+  mutate( il8_tert = il_8 %>% cut(.,breaks= c(quantile(il_8, probs = seq(0,1, by= 1/3), na.rm = TRUE)), labels = c("low", "medium", "high"), include.lowest = TRUE) %>% fct_collapse("normal" = c("low", "medium")))
+
+timepoint_b = immune_cohort %>% filter(timepoint=="B") %>%
+  filter(`Spontaneous/Indicated`=="Spontaneous"|is.na(`Spontaneous/Indicated`))
+
+timepoint_b = timepoint_b %>%  
+  mutate( il8_tert = il_8 %>% cut(.,breaks= c(quantile(il_8, probs = seq(0,1, by= 1/2), na.rm = TRUE)), labels = c("normal", "high"), include.lowest = TRUE)) 
+
+
+immune_cohort = immune_cohort%>%  
+  mutate( il8_tert = il_8 %>% cut(.,breaks= c(quantile(il_8, probs = seq(0,1, by= 1/10), na.rm = TRUE)), labels = c(1:10), include.lowest = TRUE) %>% fct_collapse("normal" = c(1:6), "high" = c(7:10)))
+
+timepoint_b = immune_cohort %>% filter(timepoint=="B") %>%
+  filter(`Spontaneous/Indicated`=="Spontaneous"|is.na(`Spontaneous/Indicated`))
+
+quantile(timepoint_b$il_8, probs = seq(0,1, by= 1/10), na.rm = TRUE)
+
+il8data = timepoint_b %>% 
+  mutate(start= if_else(asinCrisp>1.0, 1,0))
+il8data = il8data %>% 
+  mutate(end= if_else(asinCrisp>1.0, 1.6,1))
+il8data = il8data %>% 
+  mutate(startIL8= if_else(il_8>1716.605943, 1716.605943,0))
+il8data = il8data %>% 
+  mutate(endIL8= if_else(il_8>1716.605943, 38871.071880 ,1716.605943))
+
+
+percentage=il8data%>% 
+    group_by(il8_tert, CrispDom, blood_group) %>% 
+    count(GA34x) %>% 
+    mutate(Percent = round(n/sum(n)*100, 1)) %>% ungroup()
+
+percentage = percentage %>% filter(GA34x=="<34") %>% select(1:3, 5:6)
+
+percentage
+
+il8data= left_join(il8data, percentage)
+
+summary(il8data$Percent)
+
+il_8plot =il8data %>% 
+  ggplot(aes(x =asinCrisp, y = il_8, z=Percent))+
+  geom_rect(aes(xmin = start, xmax=end, ymin=startIL8, ymax=endIL8, fill=Percent))+
+  scale_fill_gradient(low="#ffffff", high="#748cab", name="Percentage sPTB <34 weeks")+
+  geom_point(aes(colour=blood_group, shape=GAforcerclage,size=GAforcerclage))+
+  scale_color_manual(name= "ABO Status", values = c("#f8e16c",  "#CB9C9F","#A4BADD"), guide="none")+
+  scale_shape_manual(name= "GA at Delivery", values = c(15,17,18, 1))+
+  scale_size_manual(name= "GA at Delivery",values = c(4,4, 4, 2))+
+  labs(x = "Proportion L. Crispatus",
+       y = "CVF IL-8 (pg/ml)")+
+  scale_x_continuous(breaks = c(0, 1.0, 1.5), labels = c("0", "0.8", "1"))+
+  scale_y_log10(position ="left")+
+  facet_wrap(~blood_group, nrow = 1, ncol = 3) +
+  geom_hline(yintercept = 1716.605943, linetype=2, )+ 
+  geom_vline(xintercept = 1.0, linetype = 2)+
+  theme(legend.key.size=unit(2,"point"))+
+  annotate("text", label="High IL-8", x=1.7, y=6500, size=3, angle =90) +
+  annotate("text", label="Normal IL-8", x=1.7, y=100, size=3, angle =90)+
+  theme_bw()+
+  theme(legend.position = "bottom", legend.box="vertical", legend.title = element_text(size=8)) +theme(axis.text = element_text(colour = "black", face = "bold"), axis.title = element_text(colour = "black", face = "bold"), strip.text = element_text(colour = "black", face = "bold"), text = element_text(colour = "black", face = "bold"),  legend.margin = margin(0, 0, 0, 0),
+      legend.spacing.x = unit(0, "mm"),
+      legend.spacing.y = unit(0, "mm"), legend.box.just = "left", legend.box.margin = margin(0.5,0,0.5,0))
+il_8plot
+```
+
+```{r figure 6b}
+
+
+timepoint_b = timepoint_b %>% mutate(logil1b = IL_1b %>% log10(), MBL = MBL %>% log10(), C5 = C5 %>% log10(), C5a = C5a %>% log10(), C3b = C3b %>% log10())
+
+
+correlation_simple_b=timepoint_b %>% 
+  ggpairs(columns = c(28,7,54, 59),ggplot2::aes(colour=blood_group), columnLabels = c("GA at delivery (w)","proportion L.crispatus", "CVF IL-8", "CVF IL-1beta"))+
+  scale_color_manual(values = c("#ffd166",  "#CB9C9F","#A4BADD"))+
+  scale_fill_manual(values = c("#ffd166","#CB9C9F","#A4BADD"))
+
+correlation_simple_b= correlation_simple_b+theme(axis.text = element_text(colour = "black", face = "bold"), axis.title = element_text(colour = "black", face = "bold"), strip.text = element_text(colour = "black", face = "bold"), text = element_text(colour = "black", face = "bold"))
+```
+
+
+Function for CCA aesthetics:
+func_plot= function(data, title){
+  data %>% 
+    ggplot(aes(x=x, y=y, shape = pch)) +
+    scale_x_continuous(limits = c(-1, 1))+
+    scale_y_continuous(limits = c(-1, 1))+
+    annotate("path",x=0+1*cos(seq(0,2*pi,length.out=100)),y=0+1*sin(seq(0,2*pi,length.out=100)), alpha = 1, size =0.5, color = "grey")+
+    annotate("path",x=0+0.5*cos(seq(0,2*pi,length.out=100)),y=0+0.5*sin(seq(0,2*pi,length.out=100)), alpha = 1, size = 0.5, color = "grey")+
+    geom_point(aes(color = Block), show.legend = FALSE)+ scale_shape_identity()+scale_color_manual(values = c("#053061", "#67001f","#b2182b"))+
+    geom_text_repel(aes(label= names, fontface=font, color = Block), size=4, point.padding=0.1, box.padding = 0.1, show.legend = FALSE, direction = "both")+
+    labs(x = "Component 1", y = "Component 2")+
+    ggtitle(title) +
+    theme_bw()+theme(plot.title = element_text(colour = "black", face = "bold"))
+}
+```{r figure 6c}
+#dominant taxa
+
+valencia_csts <- read_csv(here("Data"),"ABODataset_valencia_cst_output_stirrups-bvab_v1.csv")
+
+
+valencia_csts <- left_join(immune_cohort, valencia_csts, by=c("sample_ID" = "sampleID"))
+
+dominant_taxa <- valencia_csts[,names(sort(colSums(valencia_csts[,c(60:284)]), decreasing = TRUE))] %>% dplyr::select(1:20) %>% mutate(sample_ID=valencia_csts$sample_ID)
+
+immune_cohort_taxa = left_join(immune_cohort, dominant_taxa)
+
+shortnames <- c("L.crispatus", "L.iners", "G.vaginalis", "L.gasseri", "L.jensenii", "Bifidobac.","Atopobium_v","Strep_g", "L.spp.", "Prevotella_t", "Aerococcus", "Lachnispiraceae","Prevotell_b", "Prevotella_a", "Anaerococcus", "Rothia.spp.", "Finegoldia", "Peptoniphilus", "Atopbium_r", "Fusobact.")
+
+
+#cca
+immune_data_log =immune_cohort_taxa %>% mutate(log10(immune_cohort[c(43:50)]))
+
+timepoint_b=immune_data_log %>% filter(timepoint=="B")
+
+CCA_b=by(timepoint_b, timepoint_b$blood_group, function(x) {
+  cca <- wrapper.sgcca(X=list(Bacteria=as.matrix(x[,c(59:78)]),Cytokines=as.matrix(x[,43:50])),
+                                  ncomp=2,keepX = list(Bacteria=c(20,20),Cytokines=c(8,8)), scale=FALSE,near.zero.var=TRUE)
+  VarExplained <- cca$explained_variance
+  VarExplained
+  varnames_Bacteria<-shortnames
+  plotVar(cca, cex=c(2.5, 2), col=c("blue","red"), pch=c(16,17), var.names = list( varnames_Bacteria, cca$names$colnames$Cytokines))
+  
+})
+
+summary(timepoint_b$blood_group)
+
+cca_b_A = func_plot(data=CCA_b$`A`, title="Blood Group A (n=82)")
+cca_b_B = func_plot(data=CCA_b$`B`, title="Blood Group B (n=33)")
+cca_b_O = func_plot(data=CCA_b$`O`, title="Blood Group O (n=98)")
+
+
+cca_b = ggpubr::ggarrange(cca_b_A, cca_b_B, cca_b_O, labels = c("c", "d", "e"), nrow = 1, ncol=3)
+
+cca_b = cca_b+geom_text_repel(max.overlaps = Inf)
+
+cca_b
+```
+
+
+##Supplementary Files
+
+#Supplementary Figure 2 
+
+
+```{r}
+
+
+timepoint_a = immune_cohort %>% 
+  filter(timepoint=="A")
+
+ct_ptb_a = timepoint_a %>% 
+  filter(risk_simple=="p.PTB/MTL"&`Uterine Anomaly`=="No"&`Previous Cervical Surgery?`=="No"|risk_simple=="CT")
+
+
+p1= func_bar(data=timepoint_a, x_var = "blood_group_cst", out_var = "il_8",  x_title = "Blood Group and CST- L. Crispatus", y_title = "CVF IL-8 (pg/ml)"  )
+
+timepoint_a = func_counts(data=timepoint_a, x_var = "blood_group_cst")
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= timepoint_a,
+  il_8~var_n,
+  comparisons = list(c("A\nCrisp\n(n=36)",	"A\nOther\n(n=53)"),c("B\nCrisp\n(n=14)",	"B\nOther\n(n=27)"), c("O\nCrisp\n(n=49)",	"O\nOther\n(n=56)")),
+  ref.group = NULL,
+  p.adjust.method = "BH",
+  detailed = FALSE
+) 
+p1 = p1+  
+  scale_y_log10()+
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(30000)) 
+
+p1
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= timepoint_a,
+  `IL-1beta`~var_n,
+  comparisons = list(c("A\nCrisp\n(n=36)",	"A\nOther\n(n=53)"),c("B\nCrisp\n(n=14)",	"B\nOther\n(n=27)"), c("O\nCrisp\n(n=49)",	"O\nOther\n(n=56)")),
+  ref.group = NULL,
+  p.adjust.method = "holm",
+  detailed = FALSE
+) 
+
+p2= func_bar(data=timepoint_a, x_var = "blood_group_cst", out_var = "IL_1b",  x_title = "Blood Group and CST - L. Crispatus", y_title = "CVF IL-1beta (pg/ml)"  )
+p2 = p2+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6,
+             y.position = c(5000))
+
+p2
+
+ct_ptb_a=func_counts(data=ct_ptb_a, x_var = "blood_group_risk")
+summary(ct_ptb_a$var_n)
+
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= ct_ptb_a,
+  il_8~var_n,
+  comparisons = list(c("A\nCT\n(n=28)",	"A\np.PTB/MTL\n(n=40)"),c("B\nCT\n(n=9)",	"B\np.PTB/MTL\n(n=21)"), c("O\nCT\n(n=34)",	"O\np.PTB/MTL\n(n=49)")),
+  ref.group = NULL,
+  p.adjust.method = "none",
+  detailed = FALSE
+) 
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= ct_ptb_a,
+  IL_1b~var_n,
+  comparisons = list(c("A\nCT\n(n=28)",	"A\np.PTB/MTL\n(n=40)"),c("B\nCT\n(n=9)",	"B\np.PTB/MTL\n(n=21)"), c("O\nCT\n(n=34)",	"O\np.PTB/MTL\n(n=49)")),
+  ref.group = NULL,
+  p.adjust.method = "none",
+  detailed = FALSE
+) 
+
+p3= func_bar(data=ct_ptb_a, x_var = "blood_group_risk", out_var = "il_8",  x_title = "Blood Group and Risk Factor", y_title = "CVF IL-8 (pg/ml)"  )
+
+p3 = p3+
+    scale_shape_manual(name= "GA at Delivery", values = c(17,18, 1))+
+  scale_size_manual(name= "GA at Delivery",values = c(3, 2, 1))+
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif", 
+            label.size = 6,
+             y.position = c(30000))
+
+p3
+
+p4= func_bar(data=ct_ptb_a, x_var = "blood_group_risk", out_var = "IL_1b",  x_title = "Blood Group and Risk Factor", y_title = "CVF IL-1beta (pg/ml)"  )
+p4 = p4+
+      scale_shape_manual(name= "GA at Delivery", values = c(17,18, 1))+
+  scale_size_manual(name= "GA at Delivery",values = c(3, 2, 1))+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(5000))
+
+p4
+
+timepoint_a=timepoint_a %>% filter(`Spontaneous/Indicated`=="Spontaneous"|is.na(`Spontaneous/Indicated`))
+
+timepoint_a=func_counts(data=timepoint_a, x_var = "blood_group_37")
+summary(timepoint_a$var_n)
+
+il8_wilcox=  pairwise_wilcox_test(
+  data= timepoint_a,
+  il_8~var_n,
+  comparisons = list(c("A\nPreterm\n(n=14)",	"A\nTerm\n(n=68)"),c("B\nPreterm\n(n=12)",	"B\nTerm\n(n=21)"), c("O\nPreterm\n(n=27)",	"O\nTerm\n(n=71)")),
+  ref.group = NULL,
+  p.adjust.method = "BH",
+  detailed = FALSE
+) 
+
+il8_wilcox
+
+il1b_wilcox=  pairwise_wilcox_test(
+  data= timepoint_a,
+  IL_1b~var_n,
+  comparisons = list(c("A\nPreterm\n(n=14)",	"A\nTerm\n(n=68)"),c("B\nPreterm\n(n=12)",	"B\nTerm\n(n=21)"), c("O\nPreterm\n(n=27)",	"O\nTerm\n(n=71)")),
+  ref.group = NULL,
+  p.adjust.method = "holm",
+  detailed = FALSE
+) 
+
+il1b_wilcox
+
+p5= func_bar(data=timepoint_a, x_var = "blood_group_37", out_var = "il_8",  x_title = "Blood Group and Outcome", y_title = "CVF IL-8 (pg/ml)"  )
+
+p5 = p5 +
+  add_pvalue(il8_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6, 
+             y.position = c(30000)) 
+
+p5
+
+p6= func_bar(data=timepoint_a, x_var = "blood_group_37", out_var = "IL_1b",  x_title = "Blood Group and Outcome", y_title = "CVF IL-1beta (pg/ml)"  )
+
+p6 = p6+
+  add_pvalue(il1b_wilcox,
+                     xmin = "group1",
+                     xmax = "group2",
+                     label = "p.adj.signif",  label.size = 6,
+             y.position = c(3000))
+
+p6
+
+plot = ggpubr::ggarrange(p1,p2,p3,p4,p5,p6, common.legend=TRUE, legend = "right", labels = "AUTO", nrow = 3, ncol = 2)
+```
+
