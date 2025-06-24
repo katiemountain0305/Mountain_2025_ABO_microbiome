@@ -297,7 +297,7 @@ plot2
 ```
 
 #Figure 3 
-State which panels made in r and include code from Gang and Virginia (or separate markdowns - as they can provide their own)
+Code provided separately
 
 ```{r figure 3}
 
